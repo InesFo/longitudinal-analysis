@@ -1,0 +1,761 @@
+---
+title: "Analysis of Longitudinal Data - Effect of Lung Surgery for Severe Emphysema"
+author: "Inês Fortes"
+date: "last update: 15/07/2022"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  prettydoc::html_pretty:
+    highlight: github
+    theme: lumen
+  word_document: default
+header-includes: \usepackage{float} \floatplacement{figure}{H}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(finalfit)
+#library(plyr)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+
+
+# Read file
+df.long <- read.csv(
+  "pulmfunc.csv",
+  header = T,
+  sep = ","
+)
+
+
+```
+
+```{r clean, include=FALSE}
+# Pre-processing database
+
+str(df.long)
+
+# Convert the VISIT variable to time of visits (months)
+table(df.long$VISIT)
+df.long$VISIT[df.long$VISIT=="rz"]<-0
+df.long$VISIT[df.long$VISIT=="f06"]<-6
+df.long$VISIT[df.long$VISIT=="f12"]<-12
+df.long$VISIT[df.long$VISIT=="f24"]<-24
+df.long$VISIT[df.long$VISIT=="f36"]<-36
+df.long$VISIT[df.long$VISIT=="f48"]<-48
+df.long$VISIT[df.long$VISIT=="f60"]<-60
+df.long$VISIT<-as.numeric(df.long$VISIT)
+
+# Convert to factors
+df.long$MEDID <- as.factor(df.long$MEDID)
+df.long$gender <- as.factor(df.long$gender)
+df.long$ethnic <- as.factor(df.long$ethnic)
+
+# Eliminate first column
+df.long<-df.long[,-1]
+
+str(df.long)
+
+# Convert to Wide
+df.wide<-reshape(df.long, direction="wide" , timevar="VISIT" , idvar="NEWNETT", v.names = c("PREDFVC", "PREDFEV1", "TLC", "RV", "PAO2"))
+row.names(df.wide) = 1:(dim(df.wide)[1])
+
+```
+
+## 1. Introduction
+Lung emphysema is a clinical condition where the air sacs in the lungs (alveoli) are damaged, causing shortness of breath [1]. Severe emphysema can seriously decrease the quality of life by limiting the type of activities that patients can do. 
+
+There are several treatments available for this condition. For the less severe cases physical therapy is used, with the main objective of halting the progressive decline in lung function [2]. Also, medication may be used to reduce symptoms and increase the quality of life [2]. However, these treatments are more palliative and none of these seems to truly improve the respiratory function. For that reason, and supported by the idea that emphysema patients have larger lungs [2], lung surgery to reduce lung capacity has been implemented. However, the scientific evidence for its efficacy was doubtful [2,3,4]. 
+To study the efficacy of different treatments for this disease, in the 90s the National Emphysema Treatment Trial (NETT) joined more than 17 clinical centers from the USA. This trial followed more than 1000 patients, that were assessed across time to monitor their lung capacity and quality of life. More details about the original trial can be found in [2] and [3].
+
+In the present study a sub-sample of the NETT study was obtained. The main objective of the present analysis was to determine whether respiratory function is improved with surgery in comparison with medical therapy only. 
+
+
+## 2. Exploratory data analysis
+### 2.1 Exploring the database and choosing the dependent variable
+The database is composed of 120 patients, that were divided into two groups: surgical (N = 60) and non-surgical (N = 60). The study had a balanced design, that is, patients should be measured at baseline, prior to randomization between groups (time = 0), and then 6, 12, 24, 36, 48, and 60 months (5 years) after randomization. The majority of patients were white (95%), and 62.5% were men.
+
+```{r, include=FALSE}
+# Number of patients per group
+length(unique(df.long$NEWNETT[df.long$MEDID==1])) #60 non surgical
+length(unique(df.long$NEWNETT[df.long$MEDID==2])) #60 surgical
+
+# % of Men
+prop.table(table(df.wide$gender))
+
+# % of White
+prop.table(table(df.wide$ethnic))
+```
+
+Even though the study had a balanced design, it resulted in an unbalanced data set because patients (1) stopped being followed, (2) missed one visit and then returned on the following one, or (3) missed one particular measurement (i.e., they were present at a given time but they were only measured in some of the variables). Because there is no indication for the cause of missing data (e.g., intermittent missing, loss to follow-up for random reasons, or dropout), we will consider all data, assuming that missing data are uncorrelated with the variables under study (the possible implications are discussed in the Conclusion). 
+
+Figure 1 shows the percentage of patients with missing data at each moment (left panel) and the percentage of patients assessed at each moment or later (right panel).
+
+```{r, include=FALSE}
+
+# Number of NA measurements per patient per visit (maximum of 5 measurements per visit)
+NA.visits<-as.data.frame(cbind(df.wide$NEWNETT,
+      as.numeric(is.na(df.wide$PREDFVC.0)+is.na(df.wide$PREDFEV1.0)+is.na(df.wide$TLC.0)+is.na(df.wide$RV.0)+is.na(df.wide$PAO2.0)),
+      as.numeric(is.na(df.wide$PREDFVC.6)+is.na(df.wide$PREDFEV1.6)+is.na(df.wide$TLC.6)+is.na(df.wide$RV.6)+is.na(df.wide$PAO2.6)),
+      as.numeric(is.na(df.wide$PREDFVC.12)+is.na(df.wide$PREDFEV1.12)+is.na(df.wide$TLC.12)+is.na(df.wide$RV.12)+is.na(df.wide$PAO2.12)),
+      as.numeric(is.na(df.wide$PREDFVC.24)+is.na(df.wide$PREDFEV1.24)+is.na(df.wide$TLC.24)+is.na(df.wide$RV.24)+is.na(df.wide$PAO2.24)),
+      as.numeric(is.na(df.wide$PREDFVC.36)+is.na(df.wide$PREDFEV1.36)+is.na(df.wide$TLC.36)+is.na(df.wide$RV.36)+is.na(df.wide$PAO2.36)),
+      as.numeric(is.na(df.wide$PREDFVC.48)+is.na(df.wide$PREDFEV1.48)+is.na(df.wide$TLC.48)+is.na(df.wide$RV.48)+is.na(df.wide$PAO2.48)),
+      as.numeric(is.na(df.wide$PREDFVC.60)+is.na(df.wide$PREDFEV1.60)+is.na(df.wide$TLC.60)+is.na(df.wide$RV.60)+is.na(df.wide$PAO2.60))))
+
+# If number of NA measurements == 0 --> code: 1
+# If number of NA measurements > 0  --> code: 0
+NA.visits[,2:8][NA.visits[,2:8]>0]<-2
+NA.visits[,2:8][NA.visits[,2:8]==0]<-1
+NA.visits[,2:8][NA.visits[,2:8]==2]<-0
+
+colnames(NA.visits)<-c("id",0,6,12,24,36,48,60)
+head(NA.visits)
+
+# Several patients miss one visit and then come back. Thus, missing does not mean death.
+
+# Number with at least one missing variable at all times
+n0<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0 & NA.visits[,"36"]==0 & NA.visits[,"24"]==0 & NA.visits[,"12"]==0 & NA.visits[,"6"]==0 & NA.visits[,"0"]==0,])[1]
+# Number with at least one missing variable at all times except time==0
+n6<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0 & NA.visits[,"36"]==0 & NA.visits[,"24"]==0 & NA.visits[,"12"]==0 & NA.visits[,"6"]==0,])[1]
+# Number with at least one missing variable at all times except time==6
+n12<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0 & NA.visits[,"36"]==0 & NA.visits[,"24"]==0 & NA.visits[,"12"]==0,])[1]
+# Number with at least one missing variable at all times except time==12
+n24<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0 & NA.visits[,"36"]==0 & NA.visits[,"24"]==0,])[1]
+# Number with at least one missing variable at all times except time==24
+n36<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0 & NA.visits[,"36"]==0,])[1]
+# Number with at least one missing variable at all times except time==36
+n48<-dim(NA.visits[NA.visits[,"60"]==0 & NA.visits[,"48"]==0,])[1]
+# Number with at least one missing variable at all times except time==48
+n60<-dim(NA.visits[NA.visits[,"60"]==0,])[1]
+
+# proportion of patients that were assessed at time t or later
+n<-(120-c(n0,n6,n12,n24,n36,n48,n60))/120
+
+
+```
+
+```{r fig1, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE, fig.width=6,fig.height=3.14,fig.cap="\\label{fig:fig1}Percentage of patients with missing data at time t (left panel) and Percentage of patients assessed at time t of after time t (right panel)."}
+
+# data frame with proportion of patients that were assessed at time t or later
+data1=as.data.frame(cbind(c(0,6,12,24,36,48,60),n))
+
+# plot data1
+p1<-ggplot(data1, aes(x=V1, y=n)) +
+  geom_line()+ 
+  theme_bw() + 
+  theme(text = element_text(size=9),panel.border = element_blank(), panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+ylab("% patients that were assessed at time t or later")+xlab("time t (in weeks)")
+
+
+# data frame with proportion of patients with missing data at time t
+# convert to numeric
+NA.visits[,2:8] <- sapply(NA.visits[,2:8],as.numeric)
+# compute proportion of patients with missing data at time t
+n.na<-(120-colSums(NA.visits[,2:8]))/120
+# dataframe 
+data2=as.data.frame(cbind(c(0,6,12,24,36,48,60),n.na))
+
+# plot data2
+p2<-ggplot(data2, aes(x=V1, y=n.na)) +
+  geom_line()+ 
+  theme_bw() + 
+  theme(text = element_text(size=9), panel.border = element_blank(), panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+ylab("% patients with missing data at time t")+xlab("time t (in weeks)")
+
+# plot p2 on the left and p1 on the right 
+grid.arrange(p2,p1, nrow=1, ncol=2)
+
+```
+
+Figure 1 shows that several patients were not assessed at the beginning of the clinical trial (97.5%, time = 0) and at 48 and 60 weeks (90.8% and 95%, respectively, see left panel). On the right panel, we can see that the proportion of patients being followed decreases. For instance, at 48 weeks only 12.5% of patients were alive for sure, because they were either measured at 48 weeks or 60 weeks (i.e., they may have missed the 48-week appointment but were assessed at 60 weeks or the other way around). The other 87.5% of patients were not measured neither at 48, nor at 60 weeks. This may be due to death, or other unrelated reason. 
+
+Table 1 shows all the variables included in the data set.
+
+```{r t1, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+
+c1<-c("NEWNETT   ","VISIT   ","MEDID   ","GENDER   ","ETHNIC","PREDFVC","PREDFEV1   ","TLC","RV","PAO2")
+
+c2<-c("Patient identification",
+     "Visit times: 0, 6, 12, 24, 36, 48, and 60 months from randomization",
+     "Group: Non-surgical or Surgical",
+     "Gender: Male or Female",
+     "Ethnic: White or Other",
+     "Forced vital capacity (decrease = improvement)",
+     "Forced expiratory volume in one second (increase = improvement)",
+     "Total lung capacity (decrease = improvement)",
+     "Residual volume (decrease = improvement)",
+     "Arterial oxygen (increase = improvement)")
+
+t1<-cbind(c1,c2)
+colnames(t1)<-c("Variable   ","Description")
+
+knitr::kable(t1,caption= "Description of variables in the data set", row.names=FALSE, align=c("l", "l", "r", "r"))
+```
+```{r, include=FALSE, results=FALSE}
+
+# Count NA per variable
+# Maximum number of observations per variable: 120 patients * 7 times = 840 observations
+
+PREDFVC.NA<-rbind(sum(is.na(df.wide$PREDFVC.0)),
+  sum(is.na(df.wide$PREDFVC.6)),
+  sum(is.na(df.wide$PREDFVC.12)),
+  sum(is.na(df.wide$PREDFVC.24)),
+  sum(is.na(df.wide$PREDFVC.36)),
+  sum(is.na(df.wide$PREDFVC.48)),
+  sum(is.na(df.wide$PREDFVC.60)))
+
+PREDFEV1.NA<- rbind(sum(is.na(df.wide$PREDFEV1.0)),
+  sum(is.na(df.wide$PREDFEV1.6)),
+  sum(is.na(df.wide$PREDFEV1.12)),
+  sum(is.na(df.wide$PREDFEV1.24)),
+  sum(is.na(df.wide$PREDFEV1.36)),
+  sum(is.na(df.wide$PREDFEV1.48)),
+  sum(is.na(df.wide$PREDFEV1.60)))
+
+TLC.NA<-rbind(sum(is.na(df.wide$TLC.0)),
+  sum(is.na(df.wide$TLC.6)),
+  sum(is.na(df.wide$TLC.12)),
+  sum(is.na(df.wide$TLC.24)),
+  sum(is.na(df.wide$TLC.36)),
+  sum(is.na(df.wide$TLC.48)),
+  sum(is.na(df.wide$TLC.60)))
+
+RV.NA<-rbind(sum(is.na(df.wide$RV.0)),
+  sum(is.na(df.wide$RV.6)),
+  sum(is.na(df.wide$RV.12)),
+  sum(is.na(df.wide$RV.24)),
+  sum(is.na(df.wide$RV.36)),
+  sum(is.na(df.wide$RV.48)),
+  sum(is.na(df.wide$RV.60)))
+
+PAO2.NA<-rbind(sum(is.na(df.wide$PAO2.0)),
+  sum(is.na(df.wide$PAO2.6)),
+  sum(is.na(df.wide$PAO2.12)),
+  sum(is.na(df.wide$PAO2.24)),
+  sum(is.na(df.wide$PAO2.36)),
+  sum(is.na(df.wide$PAO2.48)),
+  sum(is.na(df.wide$PAO2.60)))
+
+# Bind all tables
+NA.Table<- cbind(PREDFVC.NA,PREDFEV1.NA, TLC.NA, RV.NA, PAO2.NA)
+
+# Change column names
+colnames(NA.Table) <- c("PREDFVC.NA","PREDFEV1.NA", "TLC.NA", "RV.NA", "PAO2.NA")
+
+# Add row with sum
+NA.Table<-rbind(NA.Table,colSums(NA.Table))
+rownames(NA.Table) <- c(0,6,12,24,36,48,60, "Total")
+
+NA.Table
+# The number of NA is similar among the 5 independent variables.
+# There are a lot of NA in time=0, time=48 and time=60.
+# PREDFVC.NA and PREDFEV1.NA have 490 NA (minimum)
+# PAO2.NA has 494 NA (maximum)
+```
+
+Table 1 shows that besides the time-independent variables such as  group (MEDID), gender and ethnic, there were five dependent variables, all associated with lung function. To assess the effect of surgery on lung function, the first step was to select one of these five variables. For that, we chose the one with (1) more observations (i.e., with less NA or missing data) and (2) an approximately normal distribution. 
+
+All variables had a similar number of NA data (min = 490 for PREDFVC and PREDFEV1; max = 494 for PAO; Note that the maximum NA was 7 visits * 120 patients = 840). Thus, we resorted to the second criterion, and the variable with a distribution closer to normal is PAO (potential arterial oxygen). 
+
+Figure 2 shows the histogram of PAO2 (left panel) and its distribution as a function of treatment (right panel).
+
+```{r fig2,echo=FALSE,warning=FALSE,error=FALSE,message=FALSE, fig.width=6,fig.height=2.57,fig.cap="\\label{fig:fig2}Histogram of PAO2 (left panel) and PAO2 boxplot as a function of treatment (right panel)."}
+
+# plot histogram of PAO2
+p1 <- ggplot(df.long, aes(x=PAO2)) + 
+  geom_histogram(fill="white",color="black")+ theme_bw()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"))+
+  xlab("PAO2 value") + ylab("Frequency")
+
+# dataframe for PAO boxplots
+# copy df.long
+df.long2<-df.long
+# change levels names
+levels(df.long2$MEDID) <- c( "non-surgical","surgical")
+df.long2$MEDID[df.long2$MEDID=='1']<-'non-surgical'
+df.long2$MEDID[df.long2$MEDID=='2']<-'surgical'
+#table(df.long2$MEDID)
+
+# plot histograms of PAO2
+p2<-ggplot(df.long2,aes(MEDID,PAO2))+ 
+  geom_boxplot()+ 
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+
+  ylab("PAO2 value")+
+  xlab("Treatment")
+
+# plot histogram on the right and boxplots on the left 
+grid.arrange(p1,p2,nrow=1)
+
+#shapiro.test(df.long$PAO2) #nonsignificant
+
+```
+
+From Figure 2 (left panel) we can see that PAO2 follows a normal distribution, which was confirmed by a Shapiro-Wilk normality test (W = 0.992, p = 0.079). The right panel shows that the distribution is similar between treatments, but the patients undergoing surgery show higher levels of arterial oxygenation (i.e., a sign of lung function improvement).
+
+### 2.2 The Arterial Oxygen variable
+Figure 3 shows the individual levels of PAO (lighter lines), as well as the average mean (darker line) for each group (surgical and non-surgical). 
+
+```{r fig3, results=FALSE, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE, fig.width=6,fig.height=3.00,fig.cap="\\label{fig:fig3}Arterial Oxygen (PAO) leves for each individual at each visit. The darker line represents the mean. The grey shadow shows the 95% confidence interval for the mean."}
+
+# The first exploratory graph is the spaghetti plot with the mean
+# super-imposed for all sample and split by treatment group
+
+# Copy df
+df<-df.long2
+# For each group (MEDID) and time (VISIT), number of non NA measurements of PAO2
+n.time.treat = c(by(df, df$MEDID, function(x){by(x$PAO2, x$VISIT, function(y){length(y[!is.na(y)])})}))
+# For each group (MEDID) and time (VISIT), variance of non NA measurements of PAO2
+v.time.treat = c(by(df , df$MEDID , function(x){by(x$PAO2,x$VISIT,function(y){var(y,na.rm=TRUE)})}))
+# For each group (MEDID) and time (VISIT), mean of non NA measurements of PAO2
+m.time.treat = c(by(df , df$MEDID , function(x){by(x$PAO2,x$VISIT,function(y){mean(y,na.rm=TRUE)})}))
+
+# 95% confidence intervals for non-surgical mean
+lower.ns<-m.time.treat[[1]] - 1.96*sqrt(v.time.treat[[1]]/n.time.treat[[1]])
+upper.ns<-m.time.treat[[1]] + 1.96*sqrt(v.time.treat[[1]]/n.time.treat[[1]])
+
+# 95% confidence intervals for surgical mean
+lower.s<-m.time.treat[[2]] - 1.96*sqrt(v.time.treat[[2]]/n.time.treat[[2]])
+upper.s<-m.time.treat[[2]] + 1.96*sqrt(v.time.treat[[2]]/n.time.treat[[2]])
+
+# Add confidence intervals to df 
+df$lower<-df$VISIT
+
+df$lower[df$lower==0 & df$MEDID=="non-surgical"]<-NA
+df$lower[df$lower==6 & df$MEDID=="non-surgical"]<-lower.ns[[1]]
+df$lower[df$lower==12 & df$MEDID=="non-surgical"]<-lower.ns[[2]]
+df$lower[df$lower==24 & df$MEDID=="non-surgical"]<-lower.ns[[3]]
+df$lower[df$lower==36 & df$MEDID=="non-surgical"]<-lower.ns[[4]]
+df$lower[df$lower==48 & df$MEDID=="non-surgical"]<-lower.ns[[5]]
+df$lower[df$lower==60 & df$MEDID=="non-surgical"]<-lower.ns[[6]]
+
+df$lower[df$lower==0 & df$MEDID=="surgical"]<-lower.s[[1]]
+df$lower[df$lower==6 & df$MEDID=="surgical"]<-lower.s[[2]]
+df$lower[df$lower==12 & df$MEDID=="surgical"]<-lower.s[[3]]
+df$lower[df$lower==24 & df$MEDID=="surgical"]<-lower.s[[4]]
+df$lower[df$lower==36 & df$MEDID=="surgical"]<-lower.s[[5]]
+df$lower[df$lower==48 & df$MEDID=="surgical"]<-lower.s[[6]]
+df$lower[df$lower==60 & df$MEDID=="surgical"]<-lower.s[[7]]
+
+df$upper<-df$VISIT
+
+df$upper[df$upper==0 & df$MEDID=="non-surgical"]<-NA
+df$upper[df$upper==6 & df$MEDID=="non-surgical"]<-upper.ns[[1]]
+df$upper[df$upper==12 & df$MEDID=="non-surgical"]<-upper.ns[[2]]
+df$upper[df$upper==24 & df$MEDID=="non-surgical"]<-upper.ns[[3]]
+df$upper[df$upper==36 & df$MEDID=="non-surgical"]<-upper.ns[[4]]
+df$upper[df$upper==48 & df$MEDID=="non-surgical"]<-upper.ns[[5]]
+df$upper[df$upper==60 & df$MEDID=="non-surgical"]<-upper.ns[[6]]
+
+df$upper[df$upper==0 & df$MEDID=="surgical"]<-upper.s[[1]]
+df$upper[df$upper==6 & df$MEDID=="surgical"]<-upper.s[[2]]
+df$upper[df$upper==12 & df$MEDID=="surgical"]<-upper.s[[3]]
+df$upper[df$upper==24 & df$MEDID=="surgical"]<-upper.s[[4]]
+df$upper[df$upper==36 & df$MEDID=="surgical"]<-upper.s[[5]]
+df$upper[df$upper==48 & df$MEDID=="surgical"]<-upper.s[[6]]
+df$upper[df$upper==60 & df$MEDID=="surgical"]<-upper.s[[7]]
+
+                                     
+# plot df
+ggplot( data = df,
+        aes(x=VISIT, y=PAO2, ymin=lower, ymax=upper)) + 
+  facet_grid(. ~ MEDID) + 
+  geom_line(aes(group = NEWNETT), colour = "lightgray", size = .3) + 
+  geom_ribbon(alpha=0.2, fill="gray30") + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  ylab("Arterial Oxygen") + 
+  xlab("Visit (months)") +
+  theme_minimal() +     
+  stat_summary(fun.y = mean,
+               geom = "line", color = "black", size = 1)+
+  scale_x_continuous(breaks=c(0, 6, 12, 24, 36,48,60)) +
+  theme(legend.position="none") + 
+  theme(
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(size = 0.5, linetype = "solid", colour = "black"))
+
+
+```
+
+As expected, Figure 3 shows slightly larger values of arterial oxygen for the surgical group in comparison with the non-surgical group. Then, at t = 0 there are several missing values and after 36 weeks several patients stopped being followed. However, for those that were not assessed after 36 weeks, there is no clear pattern in the results: some seem to be decreasing, others seem to be increasing and others seem stable. Thus, it is reasonable to assume that missing data is not associated with a tendency in levels of arterial oxygen. After 36 weeks there are few observations, which is reflected on the confidence interval that increases in range. Also, there might be a tendency for a decrease in arterial oxygen over time, especially in the non-surgical treatment.
+
+
+## 3. Linear Regression assuming independent errors
+
+```{r, echo=FALSE, error=FALSE, message=FALSE, results =FALSE, warning=FALSE}
+# dataframe with pao2
+pao2 <- data.frame(df.long$VISIT, df.long$PAO2, df.long$NEWNETT, df.long$MEDID, df.long$gender, df.long$ethnic)
+
+names(pao2) <- c("Visit", "PAO2", "ID", "Treatment", "Gender", "Ethnic")
+#str(pao2)
+
+# Saturated model with Month as continuous
+m.lm.ind <- lm(PAO2 ~ VISIT*MEDID + VISIT*gender + MEDID*gender,data=df.long)
+#summary(m.lm.ind)
+
+# Saturated model with Month as factor 
+m.lm.saturated <- lm(PAO2 ~ factor(VISIT)*MEDID + factor(VISIT)*gender + MEDID*gender,data=df.long)
+#summary(m.lm.saturated)
+
+#anova(m.lm.ind, m.lm.saturated)
+#Do not reject H0, thus, select the simplest model (m.lm.ind)
+```
+Because patients were repeatedly measured over time, it is reasonable to assume that their lung function at a given time t is correlated with the lung function at time t+k. To explore this possible correlation, we first modeled the data assuming independent errors, i.e., assuming that the lung function does not correlate across time. For this, we fitted a saturated model, that is, the most complex model to capture the effect of the covariates, and then analyzed the residuals. For this and later analysis, we modeled PAO with the covariates gender, MEDID, and VISIT (we did not include race because almost all patients were white). The saturated model included the main effects of gender, MEDID and VISIT, and all the 2x2 interactions: gender x MEDID, gender x VISIT, and MEDID x VISIT. 
+
+First we compared the model considering time as a continuous variable with another model considering time as a categorical variable. An ANOVA comparing the two models showed that the two models are not statistically different at a 0.05 significance level (F = 0.31, p = 0.99), so we chose the simplest one, with time as a continuous variable.  
+
+Figure 4 shows the predicted values as a function of observed values assuming independent errors.
+
+```{r fig4, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE, fig.width=3.84,fig.height=3.0,fig.cap="\\label{fig:fig4}Predicted values as a function of observed values assuming independent errors."}
+
+# fitted values of saturated model
+myfittedValues<-fitted(m.lm.ind)
+
+# aux table with fitted values and non-NA PAO2 values
+aux<-cbind(myfittedValues,df.long[!is.na(df.long$PAO2),"PAO2"],residuals(m.lm.ind))
+colnames(aux)<-c("fitted","observed","residuals")
+aux<-as.data.frame(aux)
+
+# plot aux
+p1 <- ggplot(aux,aes(observed,fitted)) + 
+  geom_point() + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                                    panel.grid.minor = element_blank(), 
+                                    axis.line = element_line(colour = "black"))+ 
+  xlab("Observed values of PAO2") + 
+  ylab("Predicted values of PAO2")
+p1
+```
+
+Figure 4 shows that if a linear model with independent errors is fitted to the data, the predicted values do not clearly fit the observed values. Note that if prediction was perfect all these values should fall on the Y=X line.
+
+  
+
+
+### 3.1 Naive vs. Robust Estimators
+
+After modeling the PAO2 data with time as a continuous variable, one can analyze the residuals, that is, the difference between the observed values and the predicted ones by the model. Because the model does not account for correlation across time, if there is a temporal correlation present in the data it should be visible in the correlation structure of residuals (i.e., in the unexplained variability). The model estimators obtained assuming error independence are called naive, because they are "blind" to a possible correlation structure. On the other hand, if we compute the empirical correlation between residuals at different times and use that correlation in the model, we obtain robust estimators.
+
+```{r, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, results=FALSE}
+
+# model with naive estimators
+m.lm.ind = lm(PAO2 ~ VISIT*MEDID  + VISIT*gender + MEDID*gender,data=na.omit(df.long[,c(1,6:10)]) )
+summary(m.lm.ind)
+
+# model with robust estimators
+library(gee)
+m.gee.ind = gee(PAO2 ~ VISIT*MEDID  + VISIT*gender + MEDID*gender,id=factor(NEWNETT),data=na.omit(df.long[,c(1,6:10)]) )
+summary(m.gee.ind)
+
+# statistics from m.lm.ind
+coef.mean.naive = as.matrix(coef(m.lm.ind))
+s.e.mean.naive = as.matrix(coef(summary(m.lm.ind))[,2])
+t.stat.naive = as.matrix(coef.mean.naive/s.e.mean.naive)
+p.value.naive = as.matrix(2*pt(-abs(t.stat.naive),df=342))
+
+# substitute s.e.mean by the robust estimators
+coef.mean.robust = as.matrix(coef(m.gee.ind))
+s.e.mean.robust = as.matrix(coef(summary(m.gee.ind))[,4])
+t.stat.robust = as.matrix(coef.mean.robust/s.e.mean.robust)
+p.value.robust = as.matrix(2*pt(-abs(t.stat.robust),df=342))
+
+c1<-c('$\\beta_{intercept}$','$\\beta_{VISIT}$','$\\beta_{MEDID=surgical}$','$\\beta_{gender=male}$','$\\beta_{VISIT*MEDID=surgical}$',
+     '$\\beta_{VISIT*gender=male}$','$\\beta_{MEDID=surgical*gender=male}$')
+
+c2<-round(coef.mean.naive,3)
+c3<-round(s.e.mean.naive,3)
+c4<-round(t.stat.naive,3)
+c5<-round(p.value.naive,3)
+c6<-round(s.e.mean.robust,3)
+c7<-round(t.stat.robust,3)
+c8<-round(p.value.robust,3)
+
+t1<-cbind(c1,c2,c3,c4,c5,c6,c7,c8)
+colnames(t1)<-c("Coefficient   ","Estimate","Naive SE", "Naive t", "Naive p","Robust SE", "Robust t", "Robust p")
+
+```
+```{r t2, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+
+knitr::kable(t1,caption= "Naive and robust estimators.", row.names=FALSE, align=c("l", "r", "r", "r","r", "r", "r","r"))
+```
+
+If there was no temporal correlation between measures, using the empirical correlations or assuming they are null should yield the same results. Table 2 shows that the standard errors of the estimators are different between naive and robust estimators. This has an impact on the t statistic and consequently on the p-value of testing the null hypothesis of the estimator being equal to zero. In this particular case, assuming a significance level of 5% testing each estimator yielded the same result with naive and robust estimations. In any case, the different values obtained show the importance of exploring the temporal correlation in the data.
+
+## 4. Longitudinal Data Analysis
+### 4.1 Variogram
+
+To explore the temporal correlation, one might analyze the variogram of the residuals of the saturated model. The variogram shows how residuals correlate as a function of their temporal distance, u. Note that the higher the value in the variogram, the smalller the correlation between residuals with time distance of u. Figure 5 shows the empirical variogram.
+
+```{r fig5, results=FALSE, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE,fig.width=4.8,fig.height=4.08,fig.cap="\\label{fig:fig4}Empirical variogram"}
+
+require(joineR)
+vargm = variogram(indv = df.long[!is.na(df.long$PAO2),]$NEWNETT , 
+                  time = df.long[!is.na(df.long$PAO2),]$VISIT , 
+                  Y= m.lm.ind$residuals)
+
+plot(vargm,smooth=F,points=F, ylim=c(0, 150))
+```
+
+The variogram provides insightful information regarding the correlation structure of data. First, it is important to note that there are just a few observations for 48 and 60 times, the correlations for larger intervals of time, u, are based in just a few pairs of data. Then, this variogram should only be analyzed until approximately u = 32. 
+
+From the empirical variogram it is possible to explore the various sources of variability in the data: between-subject variability (from the continuous line at V(u)=122.72 to the dashed line approximately at V(u)=60), within-subject variability (from the dashed line at approximately V(u)=60 to the dashed line approximately at V(u)=15), and unexplained variability (from zero to the the dashed line approximately at V(u)=15). From the variogram it is clear that the major source of variability is the between-subject variability, followed by the within-subject variability. Also, as the time distance increases, the correlation between residuals decrease (i.e., V(u) increases). Thus, even when a saturated linear model is fitted to the data, the residuals show temporal correlation. The shape of the variogram (similar to an S-shape) suggests that a Gaussian correlation may be present. 
+
+### 4.2 Correlation Structure
+To account for the temporal correlations, we can use the gls() or the lme() functions in R. The former method does not discriminate between the various sources of variability (i.e., it fits linear models using generalized least squares), whereas the later does (i.e., it fits linear mixed-effects models). For instance, the lme() method allows to distinguish the three sources of variability in the data described in the variogram. 
+
+Based on the previous exploratory analysis, we expected a better fit with a model with a Gaussian temporal correlation and accounting for random effects (between-subject variability). In any case, we fitted several models, with different correlation structures and components of variability and compared the results.
+
+Table 3 shows the main results of fitting different saturated models.
+
+```{r, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, results=FALSE}
+
+#Correlation structure
+library(nlme)
+
+#rho=0
+m.gls.ind <- 
+  gls(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,data=df.long[!is.na(df.long$PAO2),],
+      method="ML")
+
+#rho=x #Y=XB+U+Z
+m.gls.compSym <-
+  gls(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,data=df.long[!is.na(df.long$PAO2),],
+      correlation = corCompSymm(form = ~1 | NEWNETT), method = "ML")
+
+#exponential correlation function
+m.gls.exp <-
+  gls(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,data=df.long[!is.na(df.long$PAO2),],
+      correlation=corExp(form=~VISIT|NEWNETT),method = "ML")
+#var(yij)=sigma^2=Residual standard error^2:   10.86182^2
+
+#gaussian correlation function
+m.gls.gaus <-
+  gls(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,data=df.long[!is.na(df.long$PAO2),],
+      correlation=corGaus(form=~VISIT|NEWNETT),method = "ML")
+
+#AR1 correlation function
+m.gls.ar1 <-
+  gls(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,data=df.long[!is.na(df.long$PAO2),],
+      correlation=corAR1(form=~VISIT|NEWNETT),method = "ML")
+
+#Y=XB+U1+U2+Z
+m.lme.rintslop = lme(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,
+                     random=~1 + VISIT|NEWNETT,
+                     data=df.long[!is.na(df.long$PAO2),], method="ML")
+
+#Y=XB+U+W(t)+Z exponential
+m.lme.rint.exp = lme(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,
+                          random=~1|NEWNETT, 
+                          correlation = corExp(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                          data=df.long[!is.na(df.long$PAO2),],
+                          method="ML",
+                     control=lmeControl(maxIter = 100, msMaxIter = 100, tolerance = 1e-6))
+
+#Y=XB+U+W(t)+Z gaussian
+m.lme.rint.gaus = lme(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,
+                           random=~1|NEWNETT, 
+                           correlation = corGaus(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                           data=df.long[!is.na(df.long$PAO2),], 
+                           method="ML")
+aic<-c(AIC(m.gls.ind),
+       AIC(m.gls.ar1),
+       AIC(m.gls.exp),
+       AIC(m.gls.gaus),
+       AIC(m.gls.compSym), #smaller AIC
+       AIC(m.lme.rintslop), #Y=XB+U1+U2+Z
+       AIC(m.lme.rint.exp), #Y=XB+U+W(t)+Z exponential
+       AIC(m.lme.rint.gaus)) #Y=XB+U+W(t)+Z gaussian
+
+logl<-c(logLik(m.gls.ind),
+        logLik(m.gls.ar1),
+        logLik(m.gls.exp),
+        logLik(m.gls.gaus),
+        logLik(m.gls.compSym), #smaller AIC
+        logLik(m.lme.rintslop), #Y=XB+U1+U2+Z
+        logLik(m.lme.rint.exp), #Y=XB+U+W(t)+Z exponential
+        logLik(m.lme.rint.gaus)) #Y=XB+U+W(t)+Z gaussian
+
+met<-c("lm","gls","gls","gls","gls","lme","lme","lme")
+df<-c(8,9,9,9,9,11,11,11)
+mod<-c("Independent errors","First-order Autoregressive (AR1)","Exponential Correlation", "Gaussian Correlation", "Compound Symmetry", "Random Intercept and Slope", "Random Intercept with Exponential Correlation","Random Intercept with Gaussian Correlation")
+
+t3<-cbind(mod,met,round(aic,3),round(logl,3),df)
+colnames(t3)<-c("Model", "Method", "AIC", "LogLik", "df")
+
+```
+```{r t3, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+
+knitr::kable(t3,caption= "AIC (Akaike information criterion) and Logliklihood values for each fitted model", row.names=FALSE, align=c("l", "r", "r", "r","r", "r"))
+```
+
+Table 3 shows that the models with independent errors and the model assuming a First-order Autoregressive (AR1) correlation are the ones with higher AIC and lower log likelihood, thus they are not appropriate to model this data. This results strengthens the hypothesis that temporal correlations are present in this data.
+
+Using the gls method, the model with lower AIC and higher log likelihood is the one assuming a compound symmetry correlation structure. This model assumes a constant correlation across time, and it corresponds to a model with a random slope. Thus, even though this model simplifies the correlation structure by setting it to a constant, it captures the between-subject variability that was present in the variogram (see Figure 5). 
+
+Then, using the lme() method that allows to distinguish the sources of variability improved the model fitting. From those, the one with lower AIC and higher log likelihood is the one with a random intercept with a Gaussian correlation. This was expected because when exploring the data we saw that it was important to account for the between-subject variability and that the correlation structure seemed Gaussian. 
+
+### 4.3 Fitting the model
+
+By comparing the several models, we have selected the one with a random intercept with a gaussian correlation as the most appropriate one.
+Then, to select the fixed effects we implemented a stepwise method. First, we started with the saturated model, with the three main factors and their 2x2 interactions. Then, step by step, we removed each factor (or interaction) based on non-significant p-value of the corresponding parameter (using a 0.05 significance level). All interactions were removed and the final model was:
+
+$$Y_{ij}=\beta_{0}+\beta_{1}*VISIT_{ij}+\beta_{2}*MEDID_{=surgical}{ij}+\beta_{3}*gender_{=male}{ij}+W_{i}(t_{ij})+Z_{ij}$$
+```{r echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, results=FALSE}
+m.lme.rint.gaus = lme(PAO2 ~ VISIT*gender + VISIT*MEDID  + MEDID*gender,
+                           random=~1|NEWNETT, 
+                           correlation = corGaus(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                           data=df.long[!is.na(df.long$PAO2),], 
+                           method="ML")
+summary(m.lme.rint.gaus)
+anova(m.lme.rint.gaus)
+
+# eliminate gender:MEDID 
+m.lme.rint.gaus = lme(PAO2 ~ VISIT*gender + VISIT*MEDID,
+                           random=~1|NEWNETT, 
+                           correlation = corGaus(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                           data=df.long[!is.na(df.long$PAO2),], 
+                           method="ML")
+summary(m.lme.rint.gaus)
+anova(m.lme.rint.gaus)
+
+# eliminate VISIT:MEDID 
+m.lme.rint.gaus = lme(PAO2 ~ VISIT*gender + MEDID ,
+                           random=~1|NEWNETT, 
+                           correlation = corGaus(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                           data=df.long[!is.na(df.long$PAO2),], 
+                           method="ML")
+summary(m.lme.rint.gaus)
+anova(m.lme.rint.gaus)
+
+# eliminate VISIT:gender 
+m.lme.rint.gaus = lme(PAO2 ~ VISIT + gender + MEDID ,
+                           random=~1|NEWNETT, 
+                           correlation = corGaus(form= ~ VISIT |NEWNETT , nugget = TRUE ),
+                           data=df.long[!is.na(df.long$PAO2),], 
+                           method="ML")
+summary(m.lme.rint.gaus)
+anova(m.lme.rint.gaus)
+
+# all p-values are statistically significant
+
+# final values
+nugget_g=0.4260476
+intercept_g=8.544213 
+range_g=27.6707091  
+tau2_g = (m.lme.rint.gaus$sigma^2)*nugget_g  
+sigma2_g = (m.lme.rint.gaus$sigma^2)*(1-nugget_g) 
+nu2_g = intercept_g^2
+phi_g = range_g  
+
+
+```
+
+Table 4 presents the obtained results for the final model.
+
+
+
+```{r t4, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+
+c1<-c('$\\beta_{intercept}$','$\\beta_{VISIT}$','$\\beta_{gender=male}$','$\\beta_{MEDID=surgical}$','$\\tau^2$','$\\sigma^2$','$\\nu^2$','$\\phi$')
+c2<-c(61.656,-0.125,5.770,4.596,round(tau2_g,3),round(sigma2_g,3),round(nu2_g,3),round(phi_g,3))
+c3.0<-round(c(1.8227603, 0.0308167 ,1.9214493 ,1.8673350) ,3)
+c3<-c(c3.0,"","","","")
+c4.0<-c(225,225,117,117)
+c4<-c(c4.0,"","","","")
+c5.0<-round(c(33.82536, -4.05352, 3.00293,2.46151),3)
+c5<-c(c5.0,"","","","")
+c6.0<-round(c(0.0000, 0.0001, 0.0033,0.0153),3)
+c6<-c(c6.0,"","","","")
+
+t3<-cbind(c1,c2,c3,c4,c5,c6)
+colnames(t3)<-c("Coefficients", "Value", "SE", "df", "t-value","p-value")
+
+knitr::kable(t3,caption= "Statistics for the selected model", row.names=FALSE, align=c("l", "r", "r", "r","r", "r"))
+```
+
+From Table 4 we can see that, everything else being equal, (1) arterial oxygenation decreases 0.125 units per week, (2) males have a higher oxygenation than women, and (3) the surgical group have better oxygenation than the non-surgical group. In other words, being men and having surgery are good predictors of lung function measured by arterial oxygenation, but that may decrease with time. 
+
+Congruent with the variogram result, the larger portion of variability comes from random effects ($\nu^2=73.004$).The proportion of unexplained variability with this model is about 17% ($\tau^2/(\tau^2+\sigma^2+\nu^2)$). Also, the gaussian parameter, $\phi$ is approximately 28, meaning that from a temporal distance of 28 weeks or longer, the temporal correlation is almost null.  
+
+### 4.4 Model Diagnostics
+The selected model is the best one available. However, it may be still not good enough. To evaluate the quality of the model, we analyzed the residuals. In good-fitting models the residuals should (a) have an approximately normal distribution, (b) be centered at zero, (c) have constant variance (homoscedasticity), and (d) be independent. Figure 6 shows the fitted values as a function of observed values (left upper panel), the histogram of residuals (right upper panel), and the residuals as a function of fitted values (left bottom panel).
+
+```{r fig6, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE, fig.width=5,fig.height=4.00,fig.cap="\\label{fig:fig5}Fitted values as a function of observed values (left upper panel), histogram of residuals (right upper panel), and residuals as a function of fitted values (left bottom panel)."}
+
+# fitted values
+myfittedValues<-fitted(m.lme.rint.gaus)
+
+# aux table with y-values and fitted values
+aux<-cbind(myfittedValues,m.lme.rint.gaus$data,residuals(m.lme.rint.gaus))
+colnames(aux)<-c("fitted","observed","residuals")
+aux<-as.data.frame(aux)
+
+# plot fitted vs observed values
+p1 <- ggplot(aux,aes(observed,fitted)) + 
+  geom_point() + 
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+ 
+  xlab("Observed values of PAO2") + 
+  ylab("Fitted values of PAO2")
+
+# histogram of residuals
+p2 <- ggplot(aux, aes(x=residuals)) + 
+  geom_histogram(fill="white",color="black")+ 
+  theme_bw()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+
+  xlab("Residuals") + 
+  ylab("Frequency")
+
+# plot fitted vs residuals
+p3 <- ggplot(aux,aes(fitted,residuals)) + 
+  geom_point() + 
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+ 
+  xlab("Fitted values of PAO2") + 
+  ylab("Residuals")+
+  geom_hline(yintercept=0)
+
+grid.arrange(p1,p2,p3,nrow=2)
+
+```
+
+From the left upper panel of Figure 6 we can see that the fitted values increase linearly with the observed values, as expected. The right upper panel shows that the residuals follow a normal distribution around zero. Then, the bottom left panel shows that the residuals' variance seems constant, but there is a tendency for the model to underestimate at smaller PAO2 values and overestimate at larger PAO2 values. The failure to meet this assumption may mean that the structure of the selected model does not account for all the variability. A different structure or even a non-linear model may be necessary (not within the scope of this study). Compared with the other models, this still seems to be the one that accounts for more variability. Therefore, we keep this model taking into account that the results may be biased for the non-assumption of independence of errors.
+
+## 5. Conclusions
+
+The main objective of the present study was to determine whether surgery improved lung function in patients with lung emphysema. Because patients were followed across time, the data assessing lung function was correlated across time, and simple methods assuming independence were not viable. After accounting for temporal correlations, the selected model showed that in fact, surgery improved lung capacity. However, these results have to take into account some limitations. 
+
+First, there were several missing data, specially at the beginning and at weeks 48 and 60. Thus, in practical terms the model was highly influenced the values obtained in weeks 6, 12, 24 and 36. For a better model more data should be obtained at later times. 
+
+Second, it would be important to ascertain that at time = 0 both groups were similar in terms of lung function. In the present data set only 3 participants were assessed at baseline, and they were all from the surgical group. Therefore, it was not possible to test for differences in baseline, which, if present, could bias the conclusions. 
+
+Third, other variables (e.g., age) could be important to explain the between-subject variability. It could be important to add more covariates in the model.
+
+Fourth, the reasons for missing data were not explicit, and in case of dropouts associated with the lung function, other techniques should be implemented (survival and longitudinal joint models). 
+
+Fifth, another design feature that could ideally be implemented was to have a group with only the surgical treatment (without physical therapy). In the present study, both groups received physical therapy and the surgical group received an additional treatment (surgery). To truly assess the effect of surgery it could be interesting to have this variable isolated. However, clinically this may not be possible because therapy may be necessary for a good recovery from surgery.
+
+The data analysis also presented limitations. Mainly, as reported above the independence of residuals was not met, which could influence predictions and inference about the results. Probably, if the times when less data is available were eliminated from the analysis, better results would be obtained. However, the model would be less general and the results probably less clinically interesting. A better option would be to increase the data set at all different times.
+
+At last, other variables assessing lung function should be studied, or a combination of variables could be used as a general metric of lung function. The results reported here only focused on the arterial oxygen, but other variables can be more associated with lung function and show a more clear effect of surgery.
+
+## 6. References
+[1] Thurlbeck, W. M., & Müller, N. L. (1994). Emphysema: definition, imaging, and quantification. AJR. American journal of roentgenology, 163(5), 1017-1025.
+
+[2] Trial, G. T. N. E. T. (1999). Rationale and design of The National Emphysema Treatment Trial: a prospective randomized trial of lung volume reduction surgery. Chest, 116(6), 1750-1761.
+
+[3] National Emphysema Treatment Trial Research Group. (2003). A randomized trial comparing lung-volume–reduction surgery with medical therapy for severe emphysema. New England Journal of Medicine, 348(21), 2059-2073.
+
+[4] Lim, E., Ali, A., Cartwright, N., Sousa, I., Chetwynd, A., Polkey, M., ... & Goldstraw, P. (2006). Effect and duration of lung volume reduction surgery: mid-term results of the Brompton trial. The Thoracic and cardiovascular surgeon, 54(03), 188-192.
+
